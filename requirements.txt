@@ -1,4 +1,4 @@
-streamlist
+streamlit
 pandas
 openpyxl
 requestes
