@@ -391,7 +391,7 @@ Voici une liste de vins du catalogue LR&LB (JSON) :
 """
 
     completion = client.chat.completions.create(
-        model="mistral-7b-instruct",
+        model="llama-3.3-70b-versatile",
         messages=[
             {"role": "system", "content": system_prompt.strip()},
             {"role": "user", "content": user_prompt.strip()},
