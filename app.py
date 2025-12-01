@@ -296,7 +296,7 @@ def main():
        try:
             df_fact = load_export_facture()
             st.success(f"Factures brutes chargées : {df_fact.shape[0]} lignes")
-        except Exception as e:
+       except Exception as e:
             st.error(f"Erreur chargement Export Facture Brut.xlsx : {e}")
 
     # Construction catalogue + historique si tout va bien
