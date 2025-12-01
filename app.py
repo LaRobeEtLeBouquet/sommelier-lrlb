@@ -16,7 +16,7 @@ st.set_page_config(
 DATA_DIR = Path(__file__).parent / "data"
 
 
-# ---------- FONCTIONS DE CHARGEMENT ----------
+# ---------- FONCTIONS DE CHARGEMENT DES FICHIERS ----------
 
 @st.cache_data
 def load_pictos():
@@ -42,7 +42,7 @@ def load_export_facture():
     return pd.read_excel(path)
 
 
-# ---------- CONSTRUCTION DU CATALOGUE ----------
+# ---------- CONSTRUCTION DU CATALOGUE VENDABLE ----------
 
 def construire_catalogue(df_produits: pd.DataFrame, df_ca: pd.DataFrame) -> pd.DataFrame:
     """
@@ -51,6 +51,7 @@ def construire_catalogue(df_produits: pd.DataFrame, df_ca: pd.DataFrame) -> pd.D
     - Corps et aromes.xlsx
 
     Mapping colonnes (par index) adapté à tes fichiers :
+
     Export produits brut :
         B (1)  : id_produit
         C (2)  : Famille
@@ -67,6 +68,7 @@ def construire_catalogue(df_produits: pd.DataFrame, df_ca: pd.DataFrame) -> pd.D
         W (22) : Coup de Coeur ("Oui" / "")
         X (23) : Statut
         AA(26) : Archive (1 ou 0)
+
     Corps et aromes :
         A (0): id_produit
         B (1): Désignation
@@ -170,15 +172,15 @@ def construire_catalogue(df_produits: pd.DataFrame, df_ca: pd.DataFrame) -> pd.D
     return cat_vendable
 
 
-# ---------- CONSTRUCTION DE L'HISTORIQUE ----------
+# ---------- CONSTRUCTION DE L'HISTORIQUE CLIENT ----------
 
 def construire_historique(df_fact: pd.DataFrame) -> pd.DataFrame:
     """
     Construit un DataFrame 'historique' standardisé à partir de :
     - Export Facture Brut.xlsx
 
-    Hypothèses (v2 RGPD-safe) :
-        N : "Client" contient directement l'id_client (plus de nom)
+    Hypothèses (version RGPD-safe) :
+        N : "Client" contient directement l'id_client
         T : "N° Pièce" = "Facture 20250503"
         P : "Produits" = "N° 352 - Nom du vin"
         E : "Quantité"
@@ -249,7 +251,7 @@ def construire_historique(df_fact: pd.DataFrame) -> pd.DataFrame:
     return hist_std
 
 
-# ---------- IA MISTRAL VIA GROQ ----------
+# ---------- IA GROQ (LLAMA 3.3) ----------
 
 @st.cache_resource
 def get_groq_client():
@@ -262,8 +264,8 @@ def get_groq_client():
 
 def construire_profil_simplifie_depuis_texte(question: str) -> dict:
     """
-    Mini interprétation côté Python : couleur + budget si chiffres.
-    Le gros du travail de recommandation est laissé à Mistral.
+    Interprétation très simple : couleur + budget.
+    Le gros du travail reste côté modèle.
     """
     q = question.lower()
 
@@ -275,7 +277,6 @@ def construire_profil_simplifie_depuis_texte(question: str) -> dict:
     elif "rosé" in q or "rose" in q:
         couleur = "Rosé"
 
-    # Budget simple : on prend le premier nombre et on fait +/- 5 €
     numbers = re.findall(r"\d+", q)
     prix_min = None
     prix_max = None
@@ -284,7 +285,7 @@ def construire_profil_simplifie_depuis_texte(question: str) -> dict:
         prix_min = max(0, ref - 5)
         prix_max = ref + 5
     else:
-        # Règle de confort LR&LB : sans précision, max 35 €
+        # Sans précision, on reste sous 35 €
         prix_min = 0
         prix_max = 35
 
@@ -297,33 +298,33 @@ def construire_profil_simplifie_depuis_texte(question: str) -> dict:
 
 def filtrer_candidats(catalogue: pd.DataFrame, profil: dict, max_vins: int = 40) -> list:
     """
-    Filtre très simple côté Python pour limiter ce qu'on envoie à Mistral.
+    Filtre rapide côté Python pour limiter ce qu'on envoie à l'IA.
     On renvoie une liste de dicts JSON-sérialisables.
     """
     df = catalogue.copy()
 
-    # Filtre couleur si présent
     if profil.get("couleur"):
         df = df[df["Couleur"].str.lower() == profil["couleur"].lower()]
 
-    # Filtre budget si présent
     pm = profil.get("prix_min")
     px = profil.get("prix_max")
     if pm is not None and px is not None:
         df = df[(df["Prix_TTC"] >= pm) & (df["Prix_TTC"] <= px)]
 
-    # Si trop peu de résultats, on relâche budget
     if df.shape[0] < 5:
         df = catalogue.copy()
         if profil.get("couleur"):
             df = df[df["Couleur"].str.lower() == profil["couleur"].lower()]
 
-    # On limite le nombre de vins envoyés à l'IA
-    df = df.sample(min(max_vins, df.shape[0]), random_state=42) if df.shape[0] > max_vins else df
+    if df.shape[0] > max_vins:
+        df = df.sample(max_vins, random_state=42)
 
-    champs = ["id_produit", "Produit", "Millesime", "Prix_TTC",
-              "Couleur", "Famille", "SousFamille", "Corps", "Arome1", "Arome2",
-              "Culture", "Coup_de_Coeur", "Mention_Valorisante", "Cuvee", "Description_commerciale"]
+    champs = [
+        "id_produit", "Produit", "Millesime", "Prix_TTC",
+        "Couleur", "Famille", "SousFamille", "Corps",
+        "Arome1", "Arome2", "Culture", "Coup_de_Coeur",
+        "Mention_Valorisante", "Cuvee", "Description_commerciale"
+    ]
 
     vins = []
     for _, row in df.iterrows():
@@ -331,7 +332,6 @@ def filtrer_candidats(catalogue: pd.DataFrame, profil: dict, max_vins: int = 40)
         for c in champs:
             if c in df.columns:
                 val = row.get(c, None)
-                # conversion safe
                 if isinstance(val, (pd.Timestamp, pd.NaT.__class__)):
                     val = str(val)
                 obj[c] = val
@@ -340,13 +340,26 @@ def filtrer_candidats(catalogue: pd.DataFrame, profil: dict, max_vins: int = 40)
     return vins
 
 
-def appeler_sommelier_ia(question: str, catalogue: pd.DataFrame) -> str:
+def appeler_sommelier_ia(question: str, catalogue: pd.DataFrame, conversation_history=None) -> str:
+    """
+    conversation_history = liste de messages :
+    [{"role": "user"/"assistant", "content": "..."}]
+    Utilisé pour donner du contexte à l'IA.
+    """
     client = get_groq_client()
     if client is None:
         return "L'IA n'est pas configurée (clé GROQ_API_KEY manquante dans les secrets Streamlit)."
 
+    history_text = ""
+    if conversation_history:
+        for msg in conversation_history:
+            role = "Client" if msg["role"] == "user" else "Sommelier"
+            history_text += f"{role} : {msg['content']}\n"
+
     profil = construire_profil_simplifie_depuis_texte(question)
     candidats = filtrer_candidats(catalogue, profil, max_vins=40)
+    vins_json = json.dumps(candidats, ensure_ascii=False)
+    profil_json = json.dumps(profil, ensure_ascii=False)
 
     system_prompt = """
 Tu es "Mon Sommelier LR&LB", l'assistant de La Robe et Le Bouquet (LR&LB).
@@ -360,17 +373,17 @@ Règles :
 - Tu proposes entre 3 et 6 vins maximum.
 - Sans indication de budget, tu privilégies des vins à moins de 35 €.
 - "Petit budget" ou "pas cher" signifie plutôt moins de 15 €.
-- Si un prix est donné (ex: 25 €), tu cherches à t'en approcher, sans dépasser.
+- Si un prix est donné (par ex. 25 €), tu essaies de t'en approcher sans le dépasser.
 - Tu ne cites PAS les id_produit dans la réponse, c'est interne.
 - Tu peux t'appuyer sur Arome1 et Arome2, Corps, Culture, Famille, SousFamille, Mention_Valorisante.
+- Tu peux faire référence aux questions précédentes pour affiner ta réponse.
 """
 
-    vins_json = json.dumps(candidats, ensure_ascii=False)
-
-    profil_json = json.dumps(profil, ensure_ascii=False)
-
     user_prompt = f"""
-Question du client :
+Historique de la conversation (client / sommelier) :
+{history_text}
+
+Dernière demande du client :
 {question}
 
 Profil interprété (couleur, budget approximatif) :
@@ -403,11 +416,12 @@ Voici une liste de vins du catalogue LR&LB (JSON) :
     return completion.choices[0].message.content
 
 
-# ---------- UI PRINCIPALE ----------
+# ---------- UI PRINCIPALE (CHAT UNIQUEMENT) ----------
 
 def main():
     st.title("🍷 Mon Sommelier – La Robe et Le Bouquet")
 
+    # ----- Sidebar : état des données + reset -----
     with st.sidebar:
         st.header("Données LR&LB")
 
@@ -418,28 +432,33 @@ def main():
 
         try:
             df_pictos = load_pictos()
-            st.success(f"Pictos chargés : {df_pictos.shape[0]} lignes")
+            st.success(f"Pictos : {df_pictos.shape[0]} lignes")
         except Exception as e:
-            st.error(f"Erreur chargement Pictos.xlsx : {e}")
+            st.error(f"Erreur Pictos.xlsx : {e}")
 
         try:
             df_ca = load_corps_aromes()
             st.success(f"Corps & arômes : {df_ca.shape[0]} lignes")
         except Exception as e:
-            st.error(f"Erreur chargement Corps et aromes.xlsx : {e}")
+            st.error(f"Erreur Corps et aromes.xlsx : {e}")
 
         try:
             df_prod = load_export_produits()
-            st.success(f"Produits bruts : {df_prod.shape[0]} lignes")
+            st.success(f"Produits : {df_prod.shape[0]} lignes")
         except Exception as e:
-            st.error(f"Erreur chargement Export produits brut.xlsx : {e}")
+            st.error(f"Erreur Export produits brut.xlsx : {e}")
 
         try:
             df_fact = load_export_facture()
-            st.success(f"Factures brutes : {df_fact.shape[0]} lignes")
+            st.success(f"Factures : {df_fact.shape[0]} lignes")
         except Exception as e:
-            st.error(f"Erreur chargement Export Facture Brut.xlsx : {e}")
+            st.error(f"Erreur Export Facture Brut.xlsx : {e}")
 
+        if st.button("🔁 Réinitialiser la conversation"):
+            st.session_state["messages"] = []
+            st.experimental_rerun()
+
+    # ----- Construction catalogue / historique -----
     catalogue = None
     historique = None
 
@@ -447,49 +466,58 @@ def main():
         catalogue = construire_catalogue(df_prod, df_ca)
 
     if df_fact is not None:
-        historique = construire_historique(df_fact)
+        historique = construire_historique(df_fact)  # prêt pour la future V2 "mode facture"
 
-    onglet_donnees, onglet_ia = st.tabs(["📊 Données", "🤖 Sommelier IA (beta)"])
+    if catalogue is None or catalogue.empty:
+        st.error("Le catalogue n'est pas disponible. Impossible d'activer le sommelier.")
+        return
 
-    with onglet_donnees:
-        st.subheader("Catalogue vendable")
-        if catalogue is not None:
-            st.write(f"Nombre de vins vendables : **{catalogue.shape[0]}**")
-            st.dataframe(catalogue.head(20))
-        else:
-            st.info("Catalogue non disponible (erreur de chargement).")
+    st.markdown(
+        """
+Parlez avec votre sommelier LR&LB 👇  
+Expliquez vos goûts, votre budget, l'occasion, ou demandez un accord met/vin.
+        """
+    )
 
-        st.subheader("Historique client")
-        if historique is not None:
-            st.write(f"Lignes d'historique : **{historique.shape[0]}**")
-            st.dataframe(historique.head(20))
-        else:
-            st.info("Historique non disponible (erreur de chargement).")
+    # ----- Historique de conversation -----
+    if "messages" not in st.session_state:
+        st.session_state["messages"] = []
 
-    with onglet_ia:
-        st.subheader("Sommelier LR&LB – Mode conversationnel")
+    # Afficher les messages existants
+    for msg in st.session_state["messages"]:
+        with st.chat_message("user" if msg["role"] == "user" else "assistant"):
+            st.markdown(msg["content"])
 
-        if catalogue is None or catalogue.empty:
-            st.warning("Le catalogue n'est pas disponible. Impossible d'activer l'IA pour le moment.")
-            return
+    # Saisie utilisateur
+    question = st.chat_input("Que recherchez-vous comme vin aujourd'hui ?")
 
-        question = st.text_area(
-            "Expliquez ce que vous recherchez (goûts, couleur, budget, occasion...)",
-            value="Je cherche un vin rouge autour de 25 €, plutôt gourmand, pour un dîner entre amis.",
-            height=100,
-        )
+    if question:
+        # Ajout du message utilisateur
+        st.session_state["messages"].append({"role": "user", "content": question})
 
-        if st.button("Lancer la recommandation IA"):
-            if not question.strip():
-                st.warning("Merci d'indiquer ce que vous recherchez.")
-            else:
-                with st.spinner("Le sommelier LR&LB réfléchit à partir de votre demande et du catalogue..."):
-                    try:
-                        reponse = appeler_sommelier_ia(question, catalogue)
-                        st.markdown(reponse)
-                    except Exception as e:
-                        st.error(f"Erreur lors de l'appel à l'IA : {e}")
-                        st.stop()
+        # Affichage immédiat
+        with st.chat_message("user"):
+            st.markdown(question)
+
+        # Historique avant cette question (pour le contexte IA)
+        history_before = st.session_state["messages"][:-1]
+
+        # Réponse IA
+        with st.chat_message("assistant"):
+            with st.spinner("Le sommelier LR&LB réfléchit à partir de votre demande et du catalogue..."):
+                try:
+                    reponse = appeler_sommelier_ia(
+                        question=question,
+                        catalogue=catalogue,
+                        conversation_history=history_before
+                    )
+                    st.markdown(reponse)
+                except Exception as e:
+                    reponse = f"Erreur lors de l'appel à l'IA : {e}"
+                    st.error(reponse)
+
+        # Ajout de la réponse dans l'historique
+        st.session_state["messages"].append({"role": "assistant", "content": reponse})
 
 
 if __name__ == "__main__":
