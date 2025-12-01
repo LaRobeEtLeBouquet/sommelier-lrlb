@@ -299,14 +299,14 @@ def main():
        except Exception as e:
             st.error(f"Erreur chargement Export Facture Brut.xlsx : {e}")
 
-    # Construction catalogue + historique si tout va bien
-    if "df_prod" in locals() and "df_ca" in locals():
+   # Construction catalogue + historique si tout va bien
+   if "df_prod" in locals() and "df_ca" in locals():
         catalogue = construire_catalogue(df_prod, df_ca)
         st.subheader("Catalogue vendable construit")
         st.write(f"Nombre de vins vendables : **{catalogue.shape[0]}**")
         st.dataframe(catalogue.head(10))
 
-    if "df_fact" in locals():
+   if "df_fact" in locals():
         historique = construire_historique(df_fact)
         st.subheader("Historique client construit")
         st.write(f"Lignes d'historique : **{historique.shape[0]}**")
@@ -314,4 +314,4 @@ def main():
 
 
 if __name__ == "__main__":
-   main()
+    main()
