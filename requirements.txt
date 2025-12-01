@@ -1,0 +1,4 @@
+streamlist
+pandas
+openpyxl
+requestes
