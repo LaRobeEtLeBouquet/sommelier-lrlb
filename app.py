@@ -83,6 +83,7 @@ def construire_catalogue(df_produits: pd.DataFrame, df_ca: pd.DataFrame) -> pd.D
     prod = df_produits.copy()
     ca = df_ca.copy()
 
+    # Mapping des colonnes produits
     prod_cols = {
         "id_produit": prod.columns[1],
         "Famille": prod.columns[2],
@@ -101,6 +102,7 @@ def construire_catalogue(df_produits: pd.DataFrame, df_ca: pd.DataFrame) -> pd.D
         "Cuvee": prod.columns[13],
     }
 
+    # Mapping des colonnes corps & arômes
     ca_cols = {
         "id_produit": ca.columns[0],
         "Designation": ca.columns[1],
@@ -141,6 +143,7 @@ def construire_catalogue(df_produits: pd.DataFrame, df_ca: pd.DataFrame) -> pd.D
         ca_cols["Culture"]: "Culture",
     })
 
+    # Jointure catalogue + corps/arômes
     cat = pd.merge(prod_std, ca_std, on="id_produit", how="left")
 
     def est_vendable(row):
@@ -159,6 +162,7 @@ def construire_catalogue(df_produits: pd.DataFrame, df_ca: pd.DataFrame) -> pd.D
     cat["Vendable"] = cat.apply(est_vendable, axis=1)
     cat_vendable = cat[cat["Vendable"]].copy()
 
+    # Nettoyage des champs texte
     cat_vendable["Coup_de_Coeur"] = cat_vendable["Coup_de_Coeur"].fillna("").astype(str).str.strip().eq("Oui")
     cat_vendable["Description_commerciale"] = cat_vendable["Description_commerciale"].fillna("").astype(str)
     cat_vendable["Mention_Valorisante"] = cat_vendable["Mention_Valorisante"].fillna("").astype(str)
@@ -262,13 +266,89 @@ def get_groq_client():
     return Groq(api_key=api_key)
 
 
+# ---------- ANALYSE DU STYLE À PARTIR DE LA QUESTION ----------
+
+def analyser_criteres_style(question: str) -> dict:
+    """
+    Analyse la question du client pour en déduire :
+    - un éventuel code de corps ('léger', 'moyen', 'puissant')
+    - une liste de codes d'arômes LR&LB (fruité rouge, gourmand, boisé, minéral, etc.)
+    - un éventuel souhait de culture (bio/biodynamie)
+    """
+    q = (question or "").lower()
+
+    # --- Corps ---
+    corps = None
+    if any(mot in q for mot in ["léger", "digeste", "fluide", "facile à boire"]):
+        corps = "léger"
+    elif any(mot in q for mot in ["puissant", "corsé", "charpenté", "concentré", "tanique"]):
+        corps = "puissant"
+    elif any(mot in q for mot in ["moyen", "équilibré", "entre deux", "ni trop puissant", "ni trop léger"]):
+        corps = "moyen"
+
+    # --- Arômes / style ---
+    aromes = set()
+
+    # fruité rouge
+    if any(mot in q for mot in ["fruits rouges", "fruité rouge", "cerise", "framboise", "groseille"]):
+        aromes.add("fruité rouge")
+
+    # fruité blanc
+    if any(mot in q for mot in ["fruits blancs", "fruité blanc", "pomme", "poire"]):
+        aromes.add("fruité blanc")
+
+    # agrumes
+    if any(mot in q for mot in ["agrumes", "citron", "pamplemousse", "orange", "mandarine"]):
+        aromes.add("agrumes")
+
+    # floral
+    if any(mot in q for mot in ["floral", "fleurs", "violette", "rose", "fleur blanche"]):
+        aromes.add("floral")
+
+    # boisé
+    if any(mot in q for mot in ["boisé", "fût", "barrique", "vanillé", "toasté", "élevé en fût"]):
+        aromes.add("boisé")
+
+    # épicé
+    if any(mot in q for mot in ["épicé", "poivre", "épices", "épices douces"]):
+        aromes.add("épicé")
+
+    # gourmand
+    if any(mot in q for mot in ["gourmand", "rond", "charmeur", "onctueux"]):
+        aromes.add("gourmand")
+
+    # minéral
+    if any(mot in q for mot in ["minéral", "minérale", "pierre à fusil", "silex"]):
+        aromes.add("minéral")
+
+    # sous-bois
+    if any(mot in q for mot in ["sous-bois", "champignon", "humus", "feuille morte"]):
+        aromes.add("sous-bois")
+
+    # --- Culture (bio / biodynamie) ---
+    culture = None
+    if "biodynam" in q:
+        culture = "biodynamie"
+    elif " bio" in q or q.startswith("bio "):
+        culture = "bio"
+
+    return {
+        "corps": corps,
+        "aromes": list(aromes),
+        "culture": culture,
+    }
+
+
 def construire_profil_simplifie_depuis_texte(question: str) -> dict:
     """
-    Interprétation très simple : couleur + budget.
-    Le gros du travail reste côté modèle.
+    Interprétation très simple :
+    - couleur
+    - budget explicite (si chiffre)
+    - style (corps + arômes + culture) basé sur la question
     """
     q = question.lower()
 
+    # Couleur
     couleur = None
     if "rouge" in q:
         couleur = "Rouge"
@@ -277,6 +357,7 @@ def construire_profil_simplifie_depuis_texte(question: str) -> dict:
     elif "rosé" in q or "rose" in q:
         couleur = "Rosé"
 
+    # Prix : uniquement si un chiffre est clairement donné
     numbers = re.findall(r"\d+", q)
     prix_min = None
     prix_max = None
@@ -284,55 +365,54 @@ def construire_profil_simplifie_depuis_texte(question: str) -> dict:
         ref = float(numbers[0])
         prix_min = max(0, ref - 5)
         prix_max = ref + 5
-    else:
-        # Sans précision, on reste sous 35 €
-        prix_min = 0
-        prix_max = 35
+
+    # Style (corps / arômes / culture)
+    style = analyser_criteres_style(question)
 
     return {
         "couleur": couleur,
         "prix_min": prix_min,
         "prix_max": prix_max,
+        "corps": style["corps"],
+        "aromes": style["aromes"],
+        "culture": style["culture"],
     }
 
 
 def filtrer_candidats(
     catalogue: pd.DataFrame,
     profil: dict,
-    max_vins: int = 30,
+    max_vins: int = 9999,
     question_raw: str = ""
 ) -> list:
     """
-    Filtre rapide côté Python pour limiter ce qu'on envoie à l'IA.
-    On renvoie une liste de dicts JSON-sérialisables.
+    Filtre côté Python avant d'envoyer la liste à l'IA.
 
-    Logique :
-    - Si l'utilisateur fait une recherche précise (appellation, domaine, nom de vin,
-      ou hiérarchie type 1er cru / grand cru) SANS mention de prix → on ne filtre PAS
-      sur le prix et on restreint le catalogue aux vins qui correspondent.
-    - Sinon :
-        - on applique éventuellement la couleur,
-        - et le filtre prix basé sur profil (prix_min / prix_max),
-        - puis on réduit si besoin le nombre de vins.
+    Utilise :
+    - couleur (si demandée)
+    - prix explicite (si montant donné)
+    - style : corps, arômes (Arome1/Arome2), culture (bio/biodynamie)
+    - recherche précise d'appellation / cru / climat (Meursault, Ladoix, 1er cru, etc.)
+
+    Pas de sampling aléatoire : on envoie toutes les références filtrées.
     """
+
     df = catalogue.copy()
 
-    # 1) Filtre couleur si renseignée
+    # 1) Filtre couleur
     if profil.get("couleur"):
         df = df[df["Couleur"].str.lower() == profil["couleur"].lower()]
 
-    # 2) Détection d'une recherche "précise"
+    # 2) Recherche précise texte (Meursault, Ladoix, Domaine de la Vougeraie, millésime, etc.)
     question = (question_raw or "").lower()
-
-    # Mots de la question (lettres uniquement)
     tokens = re.findall(r"[a-zàâçéèêëîïôûùüÿñæœ]+", question)
 
-    # Mots très génériques à ignorer
     ignore = {
         "rouge", "blanc", "rose", "rosé", "vin", "vins",
         "bouteille", "bouteilles", "vos", "votre",
         "quels", "quelles", "quel", "quelle",
-        "avez", "est", "sont", "des", "les", "du", "de"
+        "avez", "est", "sont", "des", "les", "du", "de",
+        "domaine", "du", "de", "la", "le", "les"
     }
     tokens_significatifs = [t for t in tokens if len(t) >= 4 and t not in ignore]
 
@@ -347,17 +427,15 @@ def filtrer_candidats(
         mention_series.fillna("")
     ).str.lower()
 
-    # Construire la liste des termes de recherche, en gérant les pluriels simples
     search_terms = []
     for t in tokens_significatifs:
         search_terms.append(t)
-        # gestion très simple des pluriels : meursaults -> meursault, crus -> cru, etc.
         if t.endswith("s") or t.endswith("x"):
             base = t[:-1]
             if len(base) >= 4:
                 search_terms.append(base)
 
-    # Ajout de synonymes pour 1er cru / grand cru
+    # Ajout explicite pour 1er cru / grand cru
     if "premier" in tokens or "premiers" in tokens:
         search_terms.append("1er cru")
     if "grand" in tokens and "cru" in tokens:
@@ -367,41 +445,53 @@ def filtrer_candidats(
     if search_terms:
         mask = pd.Series(False, index=df.index)
         for tok in search_terms:
-            mask = mask | champ_concat.str.contains(tok)
+            mask |= champ_concat.str.contains(tok)
         if mask.any():
             df = df[mask]
             recherche_precise = True
 
-    # 3) Présence d'un prix explicite dans la question ?
-    has_number = bool(re.findall(r"\d+", question))
+    # 3) Filtre style : corps / arômes / culture
+    corps = profil.get("corps")
+    aromes = profil.get("aromes") or []
+    culture = profil.get("culture")
 
-    # On n'applique PAS de filtre prix si :
-    # - on a trouvé au moins une recherche précise
-    # - ET qu'il n'y a pas de prix explicite
-    appliquer_filtre_prix = not (recherche_precise and not has_number)
+    # Corps
+    if corps:
+        df = df[df["Corps"].str.lower() == corps.lower()]
 
-    # 4) Filtre prix si applicable
-    if appliquer_filtre_prix:
-        pm = profil.get("prix_min")
-        px = profil.get("prix_max")
-        if pm is not None and px is not None:
-            df = df[(df["Prix_TTC"] >= pm) & (df["Prix_TTC"] <= px)]
+    # Culture (bio / biodynamie)
+    if culture:
+        df = df[df["Culture"].str.lower().str.contains(culture)]
 
-    # 5) Si après tout ça on n'a rien, fallback sur couleur+prix
+    # Arômes : au moins un des arômes demandés dans Arome1 ou Arome2
+    if aromes:
+        aromes_lower = [a.lower() for a in aromes]
+        a1 = df["Arome1"].fillna("").str.lower()
+        a2 = df["Arome2"].fillna("").str.lower()
+
+        mask_arome = pd.Series(False, index=df.index)
+        for a in aromes_lower:
+            mask_arome |= a1.str.contains(a) | a2.str.contains(a)
+
+        if mask_arome.any():
+            df = df[mask_arome]
+        # si aucun vin ne matche les arômes, on ne filtre pas dessus
+        # (on laisse l'IA proposer autre chose de cohérent)
+
+    # 4) Filtre prix UNIQUEMENT si un montant explicite a été détecté
+    pm, px = profil.get("prix_min"), profil.get("prix_max")
+    if pm is not None and px is not None:
+        df = df[(df["Prix_TTC"] >= pm) & (df["Prix_TTC"] <= px)]
+
+    # 5) Fallback si plus rien : revenir à une sélection large (couleur, éventuellement prix)
     if df.shape[0] == 0:
         df = catalogue.copy()
         if profil.get("couleur"):
             df = df[df["Couleur"].str.lower() == profil["couleur"].lower()]
-        pm = profil.get("prix_min")
-        px = profil.get("prix_max")
         if pm is not None and px is not None:
             df = df[(df["Prix_TTC"] >= pm) & (df["Prix_TTC"] <= px)]
 
-    # 6) Limiter le nombre de vins envoyés à l'IA
-    #    Sauf en cas de recherche précise => on laisse TOUT
-    if df.shape[0] > max_vins and not recherche_precise:
-        df = df.sample(max_vins, random_state=42)
-
+    # 6) Pas de sampling : on envoie tout ce qui matche
     champs = [
         "id_produit", "Produit", "Millesime", "Prix_TTC",
         "Couleur", "Famille", "SousFamille", "Corps",
@@ -443,7 +533,7 @@ def appeler_sommelier_ia(question: str, catalogue: pd.DataFrame, conversation_hi
     candidats = filtrer_candidats(
         catalogue,
         profil,
-        max_vins=30,
+        max_vins=9999,
         question_raw=question
     )
     vins_json = json.dumps(candidats, ensure_ascii=False)
@@ -451,9 +541,9 @@ def appeler_sommelier_ia(question: str, catalogue: pd.DataFrame, conversation_hi
 
     system_prompt = """
 Tu es **Mon Sommelier LR&LB**, l’assistant officiel de La Robe & Le Bouquet.  
-La robe et le bouquet est un societe de négoce de vin spécialisé en Bourgogne qui vend aussi quelques vins d'autres régions
-Nous proposons des vins sélectionnés pour leur excellent, rapport qualité, prix, tout en étant représentatif de leur appellation
-Nous avons des marges reduites pour proposer des vins à prix d'amis.
+La robe et le bouquet est un societe de négoce de vin spécialisé en Bourgogne qui vend aussi quelques vins d'autres régions.
+Nous proposons des vins sélectionnés pour leur excellent rapport qualité-prix, tout en étant représentatifs de leur appellation.
+Nous avons des marges réduites pour proposer des vins à prix d'amis.
 Tu te comportes comme un **sommelier-caviste professionnel**, chaleureux, expert, simple et passionné.  
 Ton rôle est d’aider chaque client à choisir un vin **uniquement parmi le catalogue LR&LB fourni en JSON**.
 
@@ -516,11 +606,12 @@ Tu peux compléter avec :
 =====================================================================
 🟨 LOGIQUE BUDGÉTAIRE LR&LB
 =====================================================================
-- Sans précision → vins **≤ 35 €**.  
-- “Petit budget” / “pas cher” → **≤ 15 €**.  
-- Si un prix est donné (ex. 25 €) → viser au plus près de ce montant sans dépasser.  
-- Si fourchette → viser le haut de la fourchette.  
-- Si l’utilisateur ne parle pas de budget → rester subtil, ne pas poser la question directement sauf si la demande l’exige.
+- Si le client parle de "petit budget", "pas cher", "entrée de gamme",
+  oriente-toi plutôt vers des vins sous les 20 €.
+- Si un prix est donné (ex. 25 €) → vise au plus près de ce montant sans le dépasser.
+- Si une fourchette est donnée → vise la limite haute.
+- S'il ne parle pas de budget → ne filtre pas agressivement sur le prix,
+  propose simplement des options cohérentes, en restant raisonnable.
 
 =====================================================================
 🟫 COMPORTEMENT CAVISTE-CONSEIL (complet)
@@ -528,8 +619,23 @@ Tu peux compléter avec :
 Tu fonctionnes comme un caviste en boutique :
 
 1) **Commencer par écouter**  
-Si la demande est claire → tu ne poses pas de questions inutiles.  
-Si elle est floue → tu poses **maximum 2 questions** (couleur / corps / occasion / budget).
+
+- Si la demande est **très claire et ciblée sur une catégorie du catalogue**, tu peux répondre directement, sans poser de question, en listant les vins concernés.  
+  Exemples de demandes très claires :
+  - « Montre-moi tes Ladoix »
+  - « As-tu des vins du Domaine de la Vougeraie ? »
+  - « Quels sont les vins de 2018 ? »
+  - « Quels sont vos Meursault ? »
+  Dans ces cas, tu présentes les vins correspondants (éventuellement nombreux), puis tu peux proposer d’affiner ensuite (par budget, puissance, occasion, etc.).
+
+- Si la demande est **large ou générale** (par exemple : « je veux un rouge », « un vin pour ce soir », « que me conseilles-tu ? », « un vin pour un dîner entre amis »),
+  tu poses **1 à 2 questions maximum** AVANT de lancer la recommandation, pour bien cibler :
+  - occasion (apéritif, repas, cadeau…),
+  - niveau de puissance (léger / moyen / puissant),
+  - éventuellement budget,
+  - éventuellement arômes (fruité, boisé, gourmand, minéral…).
+
+Tu ne poses jamais plus de 2 questions à la suite avant de proposer au moins 2–3 vins.
 
 2) **Analyser intelligemment** ce que dit le client  
 Tu interprètes naturellement :
@@ -618,7 +724,7 @@ Si en revanche le client demande explicitement :
 - « Quels sont vos Meursault ? »
 - « Quels sont vos Rully / Ladoix ? »
 - « Quels sont vos premiers crus / grands crus ? »
-alors tu peux lister **tous les vins correspondants** présents dans la liste JSON, même s'ils sont plus nombreux.
+alors tu peux lister **tous les vins correspondants** présents dans la liste JSON.
 
 =====================================================================
 🟦 CONVERSATION MULTI-TOURS
@@ -650,7 +756,7 @@ Historique de la conversation (client / sommelier) :
 Dernière demande du client :
 {question}
 
-Profil interprété (couleur, budget approximatif) :
+Profil interprété (couleur, budget explicite, style) :
 {profil_json}
 
 Voici une liste de vins du catalogue LR&LB (JSON) :
@@ -731,7 +837,7 @@ def main():
         catalogue = construire_catalogue(df_prod, df_ca)
 
     if df_fact is not None:
-        historique = construire_historique(df_fact)  # prêt pour la future V2 "mode facture"
+        historique = construire_historique(df_fact)  # prêt pour une future V2 "mode facture"
 
     if catalogue is None or catalogue.empty:
         st.error("Le catalogue n'est pas disponible. Impossible d'activer le sommelier.")
