@@ -296,26 +296,68 @@ def construire_profil_simplifie_depuis_texte(question: str) -> dict:
     }
 
 
-def filtrer_candidats(catalogue: pd.DataFrame, profil: dict, max_vins: int = 40) -> list:
+def filtrer_candidats(
+    catalogue: pd.DataFrame,
+    profil: dict,
+    max_vins: int = 40,
+    question_raw: str = ""
+) -> list:
     """
     Filtre rapide côté Python pour limiter ce qu'on envoie à l'IA.
     On renvoie une liste de dicts JSON-sérialisables.
+
+    Logique :
+    - Si l'utilisateur fait une recherche précise (appellation, domaine, nom de vin)
+      SANS mention de prix → on ne filtre PAS sur le prix (pas de limite 35 €).
+    - Sinon :
+        - on applique éventuellement la couleur,
+        - et le filtre prix basé sur profil (prix_min / prix_max).
     """
     df = catalogue.copy()
 
+    # --- Filtre couleur si renseignée (toujours autorisé) ---
     if profil.get("couleur"):
         df = df[df["Couleur"].str.lower() == profil["couleur"].lower()]
 
-    pm = profil.get("prix_min")
-    px = profil.get("prix_max")
-    if pm is not None and px is not None:
-        df = df[(df["Prix_TTC"] >= pm) & (df["Prix_TTC"] <= px)]
+    # --- Détection d'une recherche "précise" (nom de vin / appellation / domaine) ---
+    question = (question_raw or "").lower()
 
+    mots_catalogue = (
+        df["Produit"].fillna("").str.lower().tolist()
+        + df["Famille"].fillna("").str.lower().tolist()
+        + df["SousFamille"].fillna("").str.lower().tolist()
+        + df.get("Cuvee", pd.Series([""] * len(df))).fillna("").str.lower().tolist()
+    )
+
+    recherche_precise = any(
+        mot and mot in question for mot in mots_catalogue
+    )
+
+    # Est-ce que l'utilisateur a donné un prix explicite ?
+    has_number = bool(re.findall(r"\d+", question))
+
+    # On n'applique PAS de filtre prix si :
+    # - l'utilisateur cherche quelque chose de précis
+    # - ET qu'il n'a pas donné de prix
+    appliquer_filtre_prix = True
+    if recherche_precise and not has_number:
+        appliquer_filtre_prix = False
+
+    # --- Filtre prix si applicable ---
+    if appliquer_filtre_prix:
+        pm = profil.get("prix_min")
+        px = profil.get("prix_max")
+        if pm is not None and px is not None:
+            df = df[(df["Prix_TTC"] >= pm) & (df["Prix_TTC"] <= px)]
+
+    # Si trop peu de résultats, on relâche un peu
     if df.shape[0] < 5:
         df = catalogue.copy()
+        # On garde au moins la couleur si donnée
         if profil.get("couleur"):
             df = df[df["Couleur"].str.lower() == profil["couleur"].lower()]
 
+    # Limiter le nombre de vins envoyés à l'IA
     if df.shape[0] > max_vins:
         df = df.sample(max_vins, random_state=42)
 
@@ -357,7 +399,12 @@ def appeler_sommelier_ia(question: str, catalogue: pd.DataFrame, conversation_hi
             history_text += f"{role} : {msg['content']}\n"
 
     profil = construire_profil_simplifie_depuis_texte(question)
-    candidats = filtrer_candidats(catalogue, profil, max_vins=40)
+    candidats = filtrer_candidats(
+        catalogue,
+        profil,
+        max_vins=40,
+        question_raw=question
+    )
     vins_json = json.dumps(candidats, ensure_ascii=False)
     profil_json = json.dumps(profil, ensure_ascii=False)
 
@@ -541,7 +588,7 @@ Toujours finir par une invitation douce à continuer :
 
 =====================================================================
 FIN DU PROMPT
-=====================================================================
+=====================
 """
 
     user_prompt = f"""
