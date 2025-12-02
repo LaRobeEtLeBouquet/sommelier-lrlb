@@ -307,11 +307,13 @@ def filtrer_candidats(
     On renvoie une liste de dicts JSON-sérialisables.
 
     Logique :
-    - Si l'utilisateur fait une recherche précise (appellation, domaine, nom de vin)
-      SANS mention de prix → on ne filtre PAS sur le prix (pas de limite 35 €).
+    - Si l'utilisateur fait une recherche précise (appellation, domaine, nom de vin,
+      ou hiérarchie type 1er cru / grand cru) SANS mention de prix → on ne filtre PAS
+      sur le prix et on restreint le catalogue aux vins qui correspondent.
     - Sinon :
         - on applique éventuellement la couleur,
-        - et le filtre prix basé sur profil (prix_min / prix_max).
+        - et le filtre prix basé sur profil (prix_min / prix_max),
+        - puis on réduit si besoin le nombre de vins.
     """
     df = catalogue.copy()
 
@@ -319,36 +321,49 @@ def filtrer_candidats(
     if profil.get("couleur"):
         df = df[df["Couleur"].str.lower() == profil["couleur"].lower()]
 
-    # 2) Détection d'une recherche "précise" (Meursault, Rully, domaine, etc.)
+    # 2) Détection d'une recherche "précise"
     question = (question_raw or "").lower()
 
     # Mots de la question (lettres uniquement)
     tokens = re.findall(r"[a-zàâçéèêëîïôûùüÿñæœ]+", question)
 
-    # On enlève les mots très génériques
-    ignore = {"rouge", "blanc", "rose", "rosé", "vin", "vins", "bouteille", "bouteilles"}
+    # Mots très génériques à ignorer
+    ignore = {"rouge", "blanc", "rose", "rosé", "vin", "vins", "bouteille", "bouteilles", "vos", "votre", "quels", "quelles"}
     tokens_significatifs = [t for t in tokens if len(t) >= 4 and t not in ignore]
 
     cuvee_series = df.get("Cuvee", pd.Series([""] * len(df)))
+    mention_series = df.get("Mention_Valorisante", pd.Series([""] * len(df)))
+
     champ_concat = (
         df["Produit"].fillna("") + " " +
         df["Famille"].fillna("") + " " +
         df["SousFamille"].fillna("") + " " +
-        cuvee_series.fillna("")
+        cuvee_series.fillna("") + " " +
+        mention_series.fillna("")
     ).str.lower()
 
+    # Ajout de synonymes pour 1er cru / grand cru
+    search_terms = list(tokens_significatifs)
+    if "premier" in tokens or "premiers" in tokens:
+        search_terms.append("1er cru")
+    if "grand" in tokens and "cru" in tokens:
+        search_terms.append("grand cru")
+
     recherche_precise = False
-    for tok in tokens_significatifs:
-        if champ_concat.str.contains(tok).any():
+    if search_terms:
+        mask = pd.Series(False, index=df.index)
+        for tok in search_terms:
+            mask = mask | champ_concat.str.contains(tok)
+        if mask.any():
+            df = df[mask]
             recherche_precise = True
-            break
 
     # 3) Présence d'un prix explicite dans la question ?
     has_number = bool(re.findall(r"\d+", question))
 
     # On n'applique PAS de filtre prix si :
-    # - l'utilisateur cherche quelque chose de précis
-    # - ET qu'il n'a pas donné de prix
+    # - recherche précise trouvée
+    # - ET pas de prix explicite
     appliquer_filtre_prix = not (recherche_precise and not has_number)
 
     # 4) Filtre prix si applicable
@@ -358,14 +373,19 @@ def filtrer_candidats(
         if pm is not None and px is not None:
             df = df[(df["Prix_TTC"] >= pm) & (df["Prix_TTC"] <= px)]
 
-    # 5) Si trop peu de résultats, on relâche un peu
-    if df.shape[0] < 5:
+    # 5) Si après tout ça on n'a rien, fallback sur couleur+prix
+    if df.shape[0] == 0:
         df = catalogue.copy()
         if profil.get("couleur"):
             df = df[df["Couleur"].str.lower() == profil["couleur"].lower()]
+        pm = profil.get("prix_min")
+        px = profil.get("prix_max")
+        if pm is not None and px is not None:
+            df = df[(df["Prix_TTC"] >= pm) & (df["Prix_TTC"] <= px)]
 
     # 6) Limiter le nombre de vins envoyés à l'IA
-    if df.shape[0] > max_vins:
+    #    Sauf en cas de recherche précise => on laisse TOUT pour que l'IA liste tous les Meursault / Rully, etc.
+    if df.shape[0] > max_vins and not recherche_precise:
         df = df.sample(max_vins, random_state=42)
 
     champs = [
@@ -538,27 +558,31 @@ Après les premiers vins :
 =====================================================================
 🟪 SI UN PROFIL CLIENT (HISTORIQUE) EST FOURNI
 =====================================================================
-Avant toute recommandation, tu commences par un **portrait flatteur** (2–3 phrases) basé sur :
-- couleurs dominantes,
-- familles dégustées,
-- styles,
-- arômes dominants,
-- sensibilité (élégant / puissant / fruité…),
-- gamme de prix habituelle (sans mentionner de chiffres).
+(Version actuelle : l'historique réel n'est pas encore transmis au modèle.)
 
-Exemples :
-- « Vous avez un très joli parcours de dégustation, avec une vraie sensibilité pour les vins fins et fruités. »  
-- « On sent que vous appréciez les blancs précis, floraux et élégants, avec beaucoup de fraîcheur. »  
-- « Votre historique montre un goût pour les rouges délicats, expressifs et très digestes. »
+Si le client parle de :
+- « mes commandes »,
+- « mon historique »,
+- « analyse mes factures / mes commandes »,
 
-Ensuite seulement → recommandations.
+tu dois :
+1) lui expliquer clairement et simplement que, dans cette version, tu n'as pas accès directement à ses factures ou à ses commandes,
+2) lui proposer de reconstituer son profil avec quelques questions simples (couleur, styles préférés, budget, régions aimées),
+3) ensuite seulement proposer des vins en précisant que tu t'appuies sur ses réponses et sur le catalogue LR&LB.
 
 =====================================================================
 🟧 FORMAT FINAL DES RECOMMANDATIONS (nouvelle version naturelle)
 =====================================================================
-Pour chaque vin recommandé (3 à 5 max), écrire :
+Pour chaque vin recommandé, écrire :
 
-1) **Produit – Millésime – Prix_TTC € TTC**
+1) **Nom du vin – Domaine – Millésime – Prix_TTC € TTC**
+
+Le champ `Produit` contient généralement le nom de l'appellation suivi du domaine, séparés par « - ».
+Lorsque c'est possible, sépare et affiche :
+- le nom du vin (partie avant le dernier " - "),
+- le domaine (partie après le dernier " - "),
+puis le millésime et le prix.
+
 2) Une phrase de style (couleur, famille, texture, caractère)
 3) Arômes : Arome1 & Arome2 intégrés naturellement
 4) Une phrase “situationnelle” :
@@ -574,6 +598,13 @@ Préférer :
 - « Un rouge gourmand et juteux : idéal si vous aimez les vins fruités et accessibles. »
 - « Un blanc floral et précis, parfait pour un dîner léger ou un apéritif élégant. »
 - « Une belle bouteille si vous recherchez finesse et fraîcheur. »
+
+Dans les demandes classiques (choix de vin par goût/budget/occasion), limite-toi en général à **3 à 5 vins**.
+Si en revanche le client demande explicitement :
+- « Quels sont vos Meursault ? »
+- « Quels sont vos Rully / Ladoix ? »
+- « Quels sont vos premiers crus / grands crus ? »
+alors tu peux lister **tous les vins correspondants** présents dans la liste JSON, même s'ils sont plus nombreux.
 
 =====================================================================
 🟦 CONVERSATION MULTI-TOURS
@@ -613,12 +644,13 @@ Voici une liste de vins du catalogue LR&LB (JSON) :
 {vins_json}
 
 À partir de cette liste uniquement :
-- choisis entre 3 et 6 vins adaptés à la demande,
+- choisis des vins adaptés à la demande,
 - présente chaque vin sur 3 à 5 lignes :
-    1) Produit – Millésime – Prix_TTC € TTC
+    1) Nom du vin – Domaine – Millésime – Prix_TTC € TTC
     2) Style (couleur, région/famille, corps)
     3) Arômes (Arome1, Arome2) et éventuellement un commentaire sur la texture / le style
-    4) Pourquoi c’est adapté à ce client (occasion, budget, arômes, corps)
+    4) Une phrase naturelle sur pourquoi ce vin peut plaire ou dans quel contexte il brille
+- adapte le nombre de vins : 3 à 5 en recommandation classique, tous les vins correspondants si le client demande « quels sont vos X ? ».
 - termine par une phrase proposant d’affiner (plus de puissance, autre région, autre budget, etc.).
 """
 
@@ -685,7 +717,7 @@ def main():
         catalogue = construire_catalogue(df_prod, df_ca)
 
     if df_fact is not None:
-        historique = construire_historique(df_fact)  # prêt pour la future V2 "mode facture"
+        historique = construire_historique(df_fact)  # prêt pour une future V2 "mode facture"
 
     if catalogue is None or catalogue.empty:
         st.error("Le catalogue n'est pas disponible. Impossible d'activer le sommelier.")
