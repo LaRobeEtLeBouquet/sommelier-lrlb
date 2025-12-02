@@ -283,7 +283,7 @@ def construire_profil_simplifie_depuis_texte(question: str) -> dict:
     if numbers:
         ref = float(numbers[0])
         prix_min = max(0, ref - 5)
-        prix_max = ref + 5)
+        prix_max = ref + 5
     else:
         # Sans précision, on reste sous 35 €
         prix_min = 0
