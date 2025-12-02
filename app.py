@@ -299,7 +299,7 @@ def construire_profil_simplifie_depuis_texte(question: str) -> dict:
 def filtrer_candidats(
     catalogue: pd.DataFrame,
     profil: dict,
-    max_vins: int = 40,
+    max_vins: int = 30,
     question_raw: str = ""
 ) -> list:
     """
@@ -315,49 +315,56 @@ def filtrer_candidats(
     """
     df = catalogue.copy()
 
-    # --- Filtre couleur si renseignée (toujours autorisé) ---
+    # 1) Filtre couleur si renseignée
     if profil.get("couleur"):
         df = df[df["Couleur"].str.lower() == profil["couleur"].lower()]
 
-    # --- Détection d'une recherche "précise" (nom de vin / appellation / domaine) ---
+    # 2) Détection d'une recherche "précise" (Meursault, Rully, domaine, etc.)
     question = (question_raw or "").lower()
 
-    mots_catalogue = (
-        df["Produit"].fillna("").str.lower().tolist()
-        + df["Famille"].fillna("").str.lower().tolist()
-        + df["SousFamille"].fillna("").str.lower().tolist()
-        + df.get("Cuvee", pd.Series([""] * len(df))).fillna("").str.lower().tolist()
-    )
+    # Mots de la question (lettres uniquement)
+    tokens = re.findall(r"[a-zàâçéèêëîïôûùüÿñæœ]+", question)
 
-    recherche_precise = any(
-        mot and mot in question for mot in mots_catalogue
-    )
+    # On enlève les mots très génériques
+    ignore = {"rouge", "blanc", "rose", "rosé", "vin", "vins", "bouteille", "bouteilles"}
+    tokens_significatifs = [t for t in tokens if len(t) >= 4 and t not in ignore]
 
-    # Est-ce que l'utilisateur a donné un prix explicite ?
+    cuvee_series = df.get("Cuvee", pd.Series([""] * len(df)))
+    champ_concat = (
+        df["Produit"].fillna("") + " " +
+        df["Famille"].fillna("") + " " +
+        df["SousFamille"].fillna("") + " " +
+        cuvee_series.fillna("")
+    ).str.lower()
+
+    recherche_precise = False
+    for tok in tokens_significatifs:
+        if champ_concat.str.contains(tok).any():
+            recherche_precise = True
+            break
+
+    # 3) Présence d'un prix explicite dans la question ?
     has_number = bool(re.findall(r"\d+", question))
 
     # On n'applique PAS de filtre prix si :
     # - l'utilisateur cherche quelque chose de précis
     # - ET qu'il n'a pas donné de prix
-    appliquer_filtre_prix = True
-    if recherche_precise and not has_number:
-        appliquer_filtre_prix = False
+    appliquer_filtre_prix = not (recherche_precise and not has_number)
 
-    # --- Filtre prix si applicable ---
+    # 4) Filtre prix si applicable
     if appliquer_filtre_prix:
         pm = profil.get("prix_min")
         px = profil.get("prix_max")
         if pm is not None and px is not None:
             df = df[(df["Prix_TTC"] >= pm) & (df["Prix_TTC"] <= px)]
 
-    # Si trop peu de résultats, on relâche un peu
+    # 5) Si trop peu de résultats, on relâche un peu
     if df.shape[0] < 5:
         df = catalogue.copy()
-        # On garde au moins la couleur si donnée
         if profil.get("couleur"):
             df = df[df["Couleur"].str.lower() == profil["couleur"].lower()]
 
-    # Limiter le nombre de vins envoyés à l'IA
+    # 6) Limiter le nombre de vins envoyés à l'IA
     if df.shape[0] > max_vins:
         df = df.sample(max_vins, random_state=42)
 
@@ -402,7 +409,7 @@ def appeler_sommelier_ia(question: str, catalogue: pd.DataFrame, conversation_hi
     candidats = filtrer_candidats(
         catalogue,
         profil,
-        max_vins=40,
+        max_vins=30,
         question_raw=question
     )
     vins_json = json.dumps(candidats, ensure_ascii=False)
