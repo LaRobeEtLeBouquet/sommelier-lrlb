@@ -328,7 +328,12 @@ def filtrer_candidats(
     tokens = re.findall(r"[a-zàâçéèêëîïôûùüÿñæœ]+", question)
 
     # Mots très génériques à ignorer
-    ignore = {"rouge", "blanc", "rose", "rosé", "vin", "vins", "bouteille", "bouteilles", "vos", "votre", "quels", "quelles"}
+    ignore = {
+        "rouge", "blanc", "rose", "rosé", "vin", "vins",
+        "bouteille", "bouteilles", "vos", "votre",
+        "quels", "quelles", "quel", "quelle",
+        "avez", "est", "sont", "des", "les", "du", "de"
+    }
     tokens_significatifs = [t for t in tokens if len(t) >= 4 and t not in ignore]
 
     cuvee_series = df.get("Cuvee", pd.Series([""] * len(df)))
@@ -342,8 +347,17 @@ def filtrer_candidats(
         mention_series.fillna("")
     ).str.lower()
 
+    # Construire la liste des termes de recherche, en gérant les pluriels simples
+    search_terms = []
+    for t in tokens_significatifs:
+        search_terms.append(t)
+        # gestion très simple des pluriels : meursaults -> meursault, crus -> cru, etc.
+        if t.endswith("s") or t.endswith("x"):
+            base = t[:-1]
+            if len(base) >= 4:
+                search_terms.append(base)
+
     # Ajout de synonymes pour 1er cru / grand cru
-    search_terms = list(tokens_significatifs)
     if "premier" in tokens or "premiers" in tokens:
         search_terms.append("1er cru")
     if "grand" in tokens and "cru" in tokens:
@@ -362,8 +376,8 @@ def filtrer_candidats(
     has_number = bool(re.findall(r"\d+", question))
 
     # On n'applique PAS de filtre prix si :
-    # - recherche précise trouvée
-    # - ET pas de prix explicite
+    # - on a trouvé au moins une recherche précise
+    # - ET qu'il n'y a pas de prix explicite
     appliquer_filtre_prix = not (recherche_precise and not has_number)
 
     # 4) Filtre prix si applicable
@@ -384,7 +398,7 @@ def filtrer_candidats(
             df = df[(df["Prix_TTC"] >= pm) & (df["Prix_TTC"] <= px)]
 
     # 6) Limiter le nombre de vins envoyés à l'IA
-    #    Sauf en cas de recherche précise => on laisse TOUT pour que l'IA liste tous les Meursault / Rully, etc.
+    #    Sauf en cas de recherche précise => on laisse TOUT
     if df.shape[0] > max_vins and not recherche_precise:
         df = df.sample(max_vins, random_state=42)
 
@@ -717,7 +731,7 @@ def main():
         catalogue = construire_catalogue(df_prod, df_ca)
 
     if df_fact is not None:
-        historique = construire_historique(df_fact)  # prêt pour une future V2 "mode facture"
+        historique = construire_historique(df_fact)  # prêt pour la future V2 "mode facture"
 
     if catalogue is None or catalogue.empty:
         st.error("Le catalogue n'est pas disponible. Impossible d'activer le sommelier.")
