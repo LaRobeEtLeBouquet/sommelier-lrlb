@@ -13,7 +13,68 @@ st.set_page_config(
     layout="wide",
 )
 
+# ---- STYLE LR&LB (logo, couleurs, police) ----
+st.markdown("""
+<style>
+:root {
+  --lr2b-main: rgb(91, 28, 74);
+}
+
+/* Police globale Tahoma */
+html, body, [class*="css"] {
+  font-family: "Tahoma", sans-serif;
+}
+
+/* Couleur des titres */
+h1, h2, h3, h4, h5 {
+  color: var(--lr2b-main);
+}
+
+/* Fond général très léger */
+body {
+  background-color: #fbf8fb;
+}
+
+/* Sidebar légèrement teintée */
+[data-testid="stSidebar"] {
+  background-color: #f6f1f6;
+}
+
+/* Boutons arrondis couleur maison */
+.stButton > button {
+  background-color: var(--lr2b-main);
+  color: #ffffff;
+  border-radius: 999px;
+  border: none;
+  font-weight: 600;
+}
+.stButton > button:hover {
+  filter: brightness(1.07);
+}
+
+/* Messages de chat présentés comme des cartes sobres */
+[data-testid="stChatMessage"] {
+  background-color: #ffffff;
+  border-radius: 0.75rem;
+  padding: 0.75rem 1rem;
+  margin-bottom: 0.5rem;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.04);
+}
+
+/* Champ de saisie du chat plus doux */
+[data-testid="stChatInput"] textarea {
+  border-radius: 999px !important;
+}
+
+/* Petits textes (explications) dans une teinte bordeaux douce */
+p, li, span {
+  color: #333333;
+}
+</style>
+""", unsafe_allow_html=True)
+
 DATA_DIR = Path(__file__).parent / "data"
+LOGO_PATH = Path(__file__).parent / "LOGO_DEF_DEF.jpg"   # adapte le nom du fichier si besoin
 
 
 # ---------- FONCTIONS DE CHARGEMENT DES FICHIERS ----------
@@ -790,7 +851,15 @@ Voici une liste de vins du catalogue LR&LB (JSON) :
 # ---------- UI PRINCIPALE (CHAT UNIQUEMENT) ----------
 
 def main():
-    st.title("🍷 Mon Sommelier – La Robe et Le Bouquet")
+    # Header avec logo + titre
+    if LOGO_PATH.exists():
+        col_logo, col_title = st.columns([1, 3])
+        with col_logo:
+            st.image(str(LOGO_PATH), use_column_width="auto")
+        with col_title:
+            st.title("🍷 Mon Sommelier – La Robe et Le Bouquet")
+    else:
+        st.title("🍷 Mon Sommelier – La Robe et Le Bouquet")
 
     # ----- Sidebar : état des données + reset -----
     with st.sidebar:
