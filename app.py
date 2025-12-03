@@ -74,7 +74,7 @@ p, li, span {
 """, unsafe_allow_html=True)
 
 DATA_DIR = Path(__file__).parent / "data"
-LOGO_PATH = Path(__file__).parent / "LOGO_DEF_DEF.jpg"   # adapte le nom du fichier si besoin
+LOGO_PATH = Path(__file__).parent / "LOGO_DEF_DEF.JPG"   # adapte le nom du fichier si besoin
 
 
 # ---------- FONCTIONS DE CHARGEMENT DES FICHIERS ----------
