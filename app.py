@@ -74,11 +74,8 @@ p, li, span {
 """, unsafe_allow_html=True)
 
 DATA_DIR = Path(__file__).parent / "data"
-LOGO_PATH = Path(__file__).parent / "LOGO_DEF_DEF.JPG"   # adapte le nom du fichier si besoin
-
-# Petit debug : affiche le chemin et s'il existe
-st.sidebar.write("Chemin du logo :", LOGO_PATH)
-st.sidebar.write("Logo trouvé ?", LOGO_PATH.exists())
+# Logo chargé directement depuis GitHub
+LOGO_URL = "https://raw.githubusercontent.com/LaRobeEtLeBouquet/sommelier-lrlb/refs/heads/main/LOGO_DEF_DEF.JPEG"
 
 # ---------- FONCTIONS DE CHARGEMENT DES FICHIERS ----------
 
@@ -107,13 +104,10 @@ def load_export_facture():
 
 def main():
     # Header avec logo + titre
-    if LOGO_PATH.exists():
-        col_logo, col_title = st.columns([1, 3])
-        with col_logo:
-            st.image(str(LOGO_PATH), use_column_width="auto")
-        with col_title:
-            st.title("🍷 Mon Sommelier – La Robe et Le Bouquet")
-    else:
+    col_logo, col_title = st.columns([1, 3])
+    with col_logo:
+        st.image(LOGO_URL, use_column_width="auto")
+    with col_title:
         st.title("🍷 Mon Sommelier – La Robe et Le Bouquet")
 
 # ---------- CONSTRUCTION DU CATALOGUE VENDABLE ----------
