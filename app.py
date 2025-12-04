@@ -25,8 +25,13 @@ html, body, [class*="css"] {
   font-family: "Tahoma", sans-serif;
 }
 
-/* Couleur des titres */
-h1, h2, h3, h4, h5 {
+/* Titres : couleur + taille plus discrète */
+h1 {
+  color: var(--lr2b-main);
+  font-size: 1.8rem;   /* titre principal plus petit */
+  margin-bottom: 0.2rem;
+}
+h2, h3, h4, h5 {
   color: var(--lr2b-main);
 }
 
@@ -101,14 +106,6 @@ def load_export_produits():
 def load_export_facture():
     path = DATA_DIR / "Export Facture Brut.xlsx"
     return pd.read_excel(path)
-
-def main():
-    # Header avec logo + titre
-    col_logo, col_title = st.columns([1, 3])
-    with col_logo:
-        st.image(LOGO_URL, use_column_width="auto")
-    with col_title:
-        st.title("🍷 Mon Sommelier – La Robe et Le Bouquet")
 
 # ---------- CONSTRUCTION DU CATALOGUE VENDABLE ----------
 
@@ -853,6 +850,21 @@ Voici une liste de vins du catalogue LR&LB (JSON) :
     )
 
     return completion.choices[0].message.content
+
+    # ---------- UI PRINCIPALE (CHAT UNIQUEMENT) ----------
+
+def main():
+    # ----- Header avec logo + titre -----
+    col_logo, col_title = st.columns([1, 3])
+    with col_logo:
+        # Logo plus petit
+        st.image(LOGO_URL, width=260)
+    with col_title:
+        st.title("🍷 Mon Sommelier – La Robe et Le Bouquet")
+        st.markdown(
+            "<p style='color: rgb(91,28,74); font-size:0.9rem;'>Assistant sommelier La Robe & Le Bouquet</p>",
+            unsafe_allow_html=True,
+        )
 
     # ----- Sidebar : état des données + reset -----
     with st.sidebar:
