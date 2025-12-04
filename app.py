@@ -854,20 +854,6 @@ Voici une liste de vins du catalogue LR&LB (JSON) :
 
     return completion.choices[0].message.content
 
-
-# ---------- UI PRINCIPALE (CHAT UNIQUEMENT) ----------
-
-def main():
-    # Header avec logo + titre
-    if LOGO_PATH.exists():
-        col_logo, col_title = st.columns([1, 3])
-        with col_logo:
-            st.image(str(LOGO_PATH), use_column_width="auto")
-        with col_title:
-            st.title("🍷 Mon Sommelier – La Robe et Le Bouquet")
-    else:
-        st.title("🍷 Mon Sommelier – La Robe et Le Bouquet")
-
     # ----- Sidebar : état des données + reset -----
     with st.sidebar:
         st.header("Données LR&LB")
